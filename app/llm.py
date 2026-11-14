@@ -6,6 +6,7 @@ async for event in llm.stream(messages, tools, system):
 """
 
 import asyncio
+import re
 from collections.abc import AsyncIterator
 from typing import Protocol
 
@@ -57,6 +58,16 @@ class DemoLLM:
         if last["role"] == "user" and isinstance(last["content"], list):  # a tool result came back
             return [{"type": "text", "text": "Hasil dari tool:\n" + last["content"][0]["content"]}]
         asked = last["content"] if isinstance(last["content"], str) else ""
+        attached = re.findall(r'<attachment name="([^"]+)">', asked)
+        if attached:  # check first: the attached text may itself contain words like "python" or "cari"
+            names = ", ".join(attached)
+            return [
+                {
+                    "type": "text",
+                    "text": f"(mode demo) Lampiran diterima: {names}. Model asli membacanya langsung dari percakapan "
+                    "ini. Lampiran tidak disimpan dan tidak di-embed; untuk itu pakai halaman Knowledge base.",
+                }
+            ]
         words = asked.lower()
         if any(word in words for word in ("python", "hitung", "jumlah")):
             code = "total = sum(range(1, 101))\nprint('Jumlah 1 sampai 100 =', total)"

@@ -13,14 +13,18 @@ does the same math with an index so it stays fast with millions of rows; the ide
 
 import hashlib
 import json
+import logging
+import threading
 from pathlib import Path
 
 import numpy as np
 
 from app import config
 from app.chunking import chunk_text
+from app.documents import SUPPORTED, DocumentError, extract_text
 from app.embeddings import DemoEmbedder, Embedder, Reranker, VoyageEmbedder, VoyageReranker
 
+log = logging.getLogger(__name__)
 Hit = dict  # {"source": file name, "chunk": number, "text": passage, "score": float}
 
 
@@ -36,6 +40,8 @@ class VectorStore:
         self.records: list[dict] = []  # one per chunk: source, chunk, text
         self.vectors = _empty_matrix()  # row i belongs to records[i]
         self.hashes: dict[str, str] = {}  # source -> fingerprint of the text we indexed
+        # Requests run in several threads (uploads, searches). Changing records and vectors must look like one step.
+        self._lock = threading.RLock()
         if self.directory:
             self._load()
 
@@ -48,14 +54,24 @@ class VectorStore:
         if self.hashes.get(source) == fingerprint:
             return 0  # unchanged: skip, and skip paying for the embeddings
         pieces = chunk_text(text, size, overlap)
-        vectors = self.embedder.embed(pieces, "document") if pieces else _empty_matrix()
-        self._drop(source)  # a changed document must not leave its old chunks behind
-        if pieces:
-            self.records += [{"source": source, "chunk": i, "text": piece} for i, piece in enumerate(pieces)]
-            self.vectors = vectors if len(self.vectors) == 0 else np.vstack([self.vectors, vectors])
-        self.hashes[source] = fingerprint
-        self._save()
+        vectors = self.embedder.embed(pieces, "document") if pieces else _empty_matrix()  # slow: kept outside the lock
+        with self._lock:
+            self._drop(source)  # a changed document must not leave its old chunks behind
+            if pieces:
+                self.records += [{"source": source, "chunk": i, "text": piece} for i, piece in enumerate(pieces)]
+                self.vectors = vectors if len(self.vectors) == 0 else np.vstack([self.vectors, vectors])
+            self.hashes[source] = fingerprint
+            self._save()
         return len(pieces)
+
+    def remove_document(self, source: str) -> int:
+        """Forget a document. Returns how many chunks were removed."""
+        with self._lock:
+            removed = sum(1 for record in self.records if record["source"] == source)
+            self._drop(source)
+            self.hashes.pop(source, None)
+            self._save()
+        return removed
 
     def _drop(self, source: str) -> None:
         keep = [i for i, record in enumerate(self.records) if record["source"] != source]
@@ -65,18 +81,20 @@ class VectorStore:
     # ---- searching --------------------------------------------------------------------------------------------------
     def search(self, query: str, k: int = config.DEFAULT_HITS) -> list[Hit]:
         """The k passages closest in meaning to the query, best first."""
-        if not self.records:
+        with self._lock:  # a consistent snapshot: an upload finishing mid-search must not mix old and new rows
+            records, vectors = list(self.records), self.vectors
+        if not records:
             return []
         query_vector = self.embedder.embed([query], "query")[0]
-        scores = self.vectors @ query_vector  # unit vectors: this dot product is the cosine similarity
+        scores = vectors @ query_vector  # unit vectors: this dot product is the cosine similarity
         order = np.argsort(-scores)  # best first
         if self.reranker:
-            return self._rerank(query, order[: max(k, config.RERANK_CANDIDATES)], k)
-        return [{**self.records[i], "score": round(float(scores[i]), 4)} for i in order[:k]]
+            return self._rerank(query, records, order[: max(k, config.RERANK_CANDIDATES)], k)
+        return [{**records[i], "score": round(float(scores[i]), 4)} for i in order[:k]]
 
-    def _rerank(self, query: str, candidates: np.ndarray, k: int) -> list[Hit]:
-        ranked = self.reranker.rerank(query, [self.records[i]["text"] for i in candidates], k)
-        return [{**self.records[candidates[i]], "score": round(float(score), 4)} for i, score in ranked]
+    def _rerank(self, query: str, records: list[dict], candidates: np.ndarray, k: int) -> list[Hit]:
+        ranked = self.reranker.rerank(query, [records[i]["text"] for i in candidates], k)
+        return [{**records[candidates[i]], "score": round(float(score), 4)} for i, score in ranked]
 
     # ---- saving -----------------------------------------------------------------------------------------------------
     def _save(self) -> None:
@@ -103,14 +121,18 @@ class VectorStore:
 
 
 def index_folder(store: VectorStore, folder: Path | str = config.DOCS_DIR) -> dict[str, int]:
-    """Index every .md / .txt file in the folder. Returns {file name: chunks stored, 0 = unchanged}."""
-    folder = Path(folder)
-    files = sorted(folder.iterdir()) if folder.is_dir() else []
-    return {
-        file.name: store.add_document(file.name, file.read_text(encoding="utf-8"))
-        for file in files
-        if file.suffix.lower() in (".md", ".txt")
-    }
+    """Index every supported file (.md .txt .csv .json .log .pdf). Returns {file name: chunks stored, 0 = unchanged
+    or unreadable; an unreadable file is logged, not fatal}."""
+    report = {}
+    for file in sorted(Path(folder).iterdir()) if Path(folder).is_dir() else []:
+        if not file.is_file() or file.suffix.lower() not in SUPPORTED:
+            continue
+        try:
+            report[file.name] = store.add_document(file.name, extract_text(file.name, file.read_bytes()))
+        except DocumentError as error:
+            log.warning("skipped %s: %s", file.name, error)
+            report[file.name] = 0
+    return report
 
 
 # ---- the store the app uses ------------------------------------------------------------
@@ -126,7 +148,8 @@ def get_store() -> VectorStore:
             store = VectorStore(VoyageEmbedder(), VoyageReranker(), config.INDEX_DIR)
         else:
             store = VectorStore(DemoEmbedder())  # the demo index is cheap to rebuild, so it is not saved
-        index_folder(store)
+        index_folder(store, config.DOCS_DIR)  # the examples ...
+        index_folder(store, config.UPLOAD_DIR)  # ... and everything uploaded before (the files are the source of truth)
         _store = store
     return _store
 

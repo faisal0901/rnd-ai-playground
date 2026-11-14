@@ -18,7 +18,7 @@ Butuh Python 3.10 atau lebih baru.
 - **Dengan model asli:** salin `.env.example` jadi `.env`, isi `ANTHROPIC_API_KEY` (dan `VOYAGE_API_KEY` untuk RAG),
   lalu jalankan ulang. `.env` dibaca otomatis (`python-dotenv`) dan sudah ada di `.gitignore`.
   Model bisa diganti lewat `MODEL=...` (bawaan `claude-haiku-5-5`).
-- Tes: `pytest` (66 tes, tanpa jaringan dan tanpa API key; Voyage diganti objek palsu). Lint dan format: `ruff check .` dan `ruff format .`.
+- Tes: `pytest` (134 tes, tanpa jaringan dan tanpa API key; Voyage diganti objek palsu). Lint dan format: `ruff check .` dan `ruff format .`.
 
 ## Cara kerjanya
 
@@ -45,7 +45,10 @@ browser ──POST /api/chat {messages}──▶ main.py ──▶ agent.py (loo
 | `app/embeddings.py` | embedding Voyage + embedding demo + reranker | teks jadi vektor, `input_type` |
 | `app/chunking.py` | memotong teks panjang | ukuran dan overlap |
 | `app/rag.py` | penyimpanan vektor, indexing, pencarian | cosine, top-k, rerank, cache sidik jari |
-| `docs/` | dokumen contoh (kopi, hewan, cuti) | bahan untuk dicari |
+| `app/documents.py` | file → teks (txt, md, csv, json, log, PDF), nama file aman | satu jalur baca untuk KB dan lampiran |
+| `app/kb.py` | simpan, embed, daftar, hapus dokumen knowledge base | upload yang langsung masuk RAG |
+| `static/kb.html` | halaman **Knowledge base** (`/kb`) | upload, daftar, hapus, coba cari |
+| `docs/` | dokumen contoh (kopi, hewan, cuti), hanya baca | bahan untuk dicari |
 
 ## Debug di VS Code
 
@@ -104,6 +107,27 @@ Konsep yang perlu dipegang:
 - **Sidik jari (hash)**: dokumen yang tidak berubah dilewati saat index ulang, jadi tidak membayar embedding dua kali.
 - **Dibangun saat pertama dipakai, bukan saat start**: permintaan pertama sedikit lebih lambat, tapi server tidak lambat naik.
 
+## Knowledge base dan lampiran chat: dua jalur yang berbeda
+
+| | Halaman **Knowledge base** (`/kb`) | **Lampirkan** di chat |
+|---|---|---|
+| Endpoint | `POST /api/kb` | `POST /api/attach` |
+| Disimpan di server | ya, di `data/uploads/` | **tidak** |
+| Di-embed (masuk RAG) | **ya**, langsung | **tidak** |
+| Siapa yang membaca | model, lewat tool `search_docs`, hanya potongan yang relevan | model, **seluruh isi**, di percakapan itu saja |
+| Bertahan setelah refresh/restart | ya | tidak (hanya ada di tab dan percakapan itu) |
+| Batas | 10 MB per file, 400.000 karakter | 10 MB, tapi teks dipotong di 30.000 karakter |
+| Cocok untuk | panduan, SOP, catatan yang dipakai berulang | "ringkas file ini", pertanyaan sekali pakai |
+
+Lampiran chat dikirim ulang di setiap permintaan percakapan (server tidak menyimpan apa pun), jadi file besar membuat tiap
+giliran mahal. Itu sebabnya dipotong. Untuk file besar yang sering ditanyakan, pakai Knowledge base: yang dikirim ke model
+hanya beberapa potongan.
+
+Yang terjadi saat upload ke `/kb`: nama file dibersihkan (tanpa folder) → teks diambil (PDF lewat `pypdf`) → disimpan →
+dipotong → di-embed → indeks disimpan. File yang sama diunggah lagi dilewati (sidik jari). Saat server mulai, isi
+`data/uploads/` di-index ulang (file adalah sumber kebenaran; pada mode Voyage indeks tersimpan dipakai dan yang tidak berubah dilewati).
+Batas yang ada: PDF hasil scan tidak punya teks (ditolak dengan pesan jelas), PDF berpassword ditolak, tipe lain (.docx, gambar) ditolak.
+
 Mencobanya tanpa LLM:
 ```bash
 python -m app.rag "kopi saya terasa pahit"                    # skor per potongan di terminal
@@ -149,10 +173,13 @@ Itu tidak apa-apa untuk belajar dan sengaja dibiarkan supaya kodenya tetap kecil
 1. **Lihat sendiri efeknya.** Di `rag.py`, ubah `add_document(..., size=800, overlap=150)` jadi `size=200, overlap=0`, index ulang
    (hapus `data/index/`), lalu tanya hal yang jawabannya melintasi dua paragraf. Apa yang hilang?
 2. **Reranker.** Tulis `ReverseReranker`-mu sendiri seperti di `tests/test_rag.py`, lalu bandingkan urutan dengan dan tanpa `VoyageReranker`.
-3. **Tambah PDF.** `index_folder` hanya membaca `.md` dan `.txt`. Tambah `.pdf` dengan `pypdf` (ekstrak teks per halaman, simpan nomor halaman di `records`).
-   Perhatikan: PDF hasil scan tidak punya teks. Itu sebabnya Router punya jalur OCR.
+3. **Nomor halaman PDF.** Sekarang semua halaman PDF digabung jadi satu teks. Simpan nomor halaman di setiap potongan
+   (`records`) supaya jawaban bisa berbunyi "lihat `laporan.pdf` halaman 7". Apa yang berubah di `chunk_text`?
 4. **Metadata filter.** Tambah kolom `tag` per dokumen dan parameter `tag` di `search_docs`, lalu saring sebelum menghitung cosine
    (di Router: `knowledge_filter`).
 5. **Hybrid search.** Gabungkan skor vektor dengan pencocokan kata (BM25 sederhana). Di mana kata kunci mengalahkan embedding? (Kode produk, nama orang.)
 6. **Ukur kualitasnya.** Buat 15 pasangan (pertanyaan, berkas yang benar), hitung seberapa sering berkas benar ada di top 3 (recall@3).
    Ubah ukuran chunk dan bandingkan angkanya. Tanpa angka, "lebih bagus" hanya perasaan.
+7. **Tombol "Simpan ke knowledge base" pada lampiran.** Lampiran sudah dibaca servernya; buat tombol yang mengirim teks itu ke `POST /api/kb`.
+   Perhatikan: `add_upload` butuh `bytes` file, jadi apa yang perlu diubah?
+8. **OCR untuk PDF scan.** Sekarang ditolak. Tambahkan jalur `pytesseract`, lalu pikirkan: berapa lama OCR 100 halaman? Haruskah upload menunggu? (Router memakai worker terpisah.)

@@ -125,11 +125,47 @@ def test_the_reranker_gets_the_candidates_and_its_order_wins():
     assert hits[0]["score"] == 1.0  # and the score shown is the reranker's
 
 
-def test_index_folder_reads_md_and_txt_only_and_reports_chunks(tmp_path):
+def test_index_folder_reads_supported_files_only_and_reports_chunks(tmp_path):
     (tmp_path / "a.md").write_text(KOPI, encoding="utf-8")
     (tmp_path / "b.txt").write_text(KUCING, encoding="utf-8")
-    (tmp_path / "c.pdf").write_bytes(b"%PDF not text")
+    (tmp_path / "c.png").write_bytes(b"\x89PNG not text")  # not a supported type: ignored
+    (tmp_path / "d.pdf").write_bytes(
+        b"%PDF this is not a real pdf"
+    )  # supported type, unreadable: reported as 0, not fatal
     store = VectorStore(DemoEmbedder())
-    assert index_folder(store, str(tmp_path)) == {"a.md": 1, "b.txt": 1}
-    assert index_folder(store, str(tmp_path)) == {"a.md": 0, "b.txt": 0}  # second run: nothing changed
+    assert index_folder(store, str(tmp_path)) == {"a.md": 1, "b.txt": 1, "d.pdf": 0}
+    assert index_folder(store, str(tmp_path)) == {"a.md": 0, "b.txt": 0, "d.pdf": 0}  # second run: nothing changed
     assert index_folder(store, str(tmp_path / "missing")) == {}
+
+
+def test_a_removed_document_is_gone_from_search_and_from_the_saved_index(tmp_path):
+    store = make_store(directory=str(tmp_path))
+    assert store.remove_document("kopi.md") == 1
+    assert store.remove_document("kopi.md") == 0  # removing twice is harmless
+    assert all(hit["source"] != "kopi.md" for hit in store.search("kopi pahit air panas", k=5))
+    again = VectorStore(DemoEmbedder(), directory=str(tmp_path))
+    assert {r["source"] for r in again.records} == {"kucing.md", "cuti.md"} and "kopi.md" not in again.hashes
+    assert again.add_document("kopi.md", KOPI) == 1  # it can be added again, because the fingerprint was forgotten
+
+
+def test_searching_while_documents_are_added_never_sees_half_a_change():
+    import threading
+
+    store = make_store()
+    failures = []
+
+    def writer():
+        for i in range(40):
+            store.add_document("rame.md", f"dokumen rame nomor {i} tentang kopi dan air panas")
+
+    def reader():
+        for _ in range(150):
+            try:
+                store.search("kopi air panas", k=3)
+            except Exception as error:  # an IndexError here means rows and vectors went out of step
+                failures.append(error)
+
+    threads = [threading.Thread(target=writer), threading.Thread(target=reader), threading.Thread(target=reader)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert failures == []

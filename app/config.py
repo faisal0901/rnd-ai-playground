@@ -27,7 +27,8 @@ SANDBOX_MEMORY_BYTES = 512 * 1024 * 1024  # Linux and macOS only
 SANDBOX_FILE_BYTES = 10 * 1024 * 1024  # largest file the code may write
 
 # ---- RAG -----------------------------------------------------------------------------------------------------------
-DOCS_DIR = ROOT / "docs"
+DOCS_DIR = ROOT / "docs"  # built-in examples, shipped with the project
+UPLOAD_DIR = ROOT / "data" / "uploads"  # what you upload on the /kb page
 INDEX_DIR = ROOT / "data" / "index"
 CHUNK_SIZE = 800  # characters per chunk
 CHUNK_OVERLAP = 150  # characters shared by neighbouring chunks
@@ -36,3 +37,8 @@ RERANK_CANDIDATES = 20  # how many vector-search hits the reranker may reorder
 DEFAULT_HITS = 5  # passages returned when the model does not say
 MAX_HITS = 10  # most passages the model may ask for
 DEMO_DIMENSIONS = 512  # size of the demo embedder's vectors
+
+# ---- uploads -------------------------------------------------------------------------------------------------------
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # largest file accepted
+MAX_DOC_CHARS = 400_000  # longest text one knowledge-base document may have (it is all embedded, which costs money)
+MAX_ATTACH_CHARS = 30_000  # a chat attachment goes into every request of the conversation, so it is cut here
