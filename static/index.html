@@ -84,7 +84,7 @@ function showEmpty() {
   const box = el("div", "empty");
   box.append("Coba salah satu, atau tulis sendiri:");
   box.append(document.createElement("br"));
-  for (const text of ["Hitung jumlah 1 sampai 100 pakai python", "Halo, kamu siapa?"]) {
+  for (const text of ["Hitung jumlah 1 sampai 100 pakai python", "Cari di dokumen: kopi saya terasa pahit", "Halo, kamu siapa?"]) {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = text;
@@ -103,12 +103,15 @@ function toolCard(name, code) {
 
 function showResult(card, result) {
   const status = document.createElement("pre");
-  const label = result.error ? "error" : result.timed_out ? "timeout" : `exit ${result.exit_code}`;
+  const hits = result.results;                // a search_docs result has hits; a run_python result has stdout/stderr
+  const label = result.error ? "error" : hits ? `${hits.length} hasil` : result.timed_out ? "timeout" : `exit ${result.exit_code}`;
   const head = document.createElement("span");
   head.className = "status " + (result.ok ? "ok" : "bad");
   head.textContent = label;
   status.appendChild(head);
-  const body = result.error || [result.stdout, result.stderr].filter(Boolean).join("\n");
+  const body = result.error
+    || (hits ? hits.map((h) => `${h.score.toFixed(3)}  ${h.source} #${h.chunk}\n${h.text}`).join("\n\n")
+             : [result.stdout, result.stderr].filter(Boolean).join("\n"));
   status.append(body ? "\n" + body : "");
   card.appendChild(status);
 }
@@ -140,7 +143,7 @@ async function send(text) {
           bubble = bubble || el("div", "bubble assistant");
           bubble.textContent += event.text;
         } else if (event.kind === "tool_call") {
-          bubble = null; card = toolCard(event.name, event.input.code ?? JSON.stringify(event.input, null, 2));
+          bubble = null; card = toolCard(event.name, event.input.code ?? event.input.query ?? JSON.stringify(event.input, null, 2));
         } else if (event.kind === "tool_result") {
           if (card) showResult(card, event.result);
           card = null;

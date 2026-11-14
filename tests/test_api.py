@@ -9,7 +9,7 @@ from app.main import create_app
 def post(client, messages):
     response = client.post("/api/chat", json={"messages": messages})
     assert response.headers["content-type"].startswith("text/event-stream")
-    return [json.loads(chunk[len("data: "):]) for chunk in response.text.split("\n\n") if chunk]
+    return [json.loads(chunk[len("data: ") :]) for chunk in response.text.split("\n\n") if chunk]
 
 
 def test_the_page_is_served():
@@ -26,7 +26,9 @@ def test_a_chat_streams_events_and_ends_with_the_whole_transcript():
 
 
 def test_the_demo_runs_real_code_in_the_sandbox():
-    events = post(TestClient(create_app(DemoLLM())), [{"role": "user", "content": "hitung jumlah 1 sampai 100 pakai python"}])
+    events = post(
+        TestClient(create_app(DemoLLM())), [{"role": "user", "content": "hitung jumlah 1 sampai 100 pakai python"}]
+    )
     result = next(e for e in events if e["kind"] == "tool_result")["result"]
     assert result["ok"] and "5050" in result["stdout"]
 

@@ -8,14 +8,17 @@ sekitar 300 baris semuanya. Ditulis dari nol supaya bisa dibaca dari atas ke baw
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --reload      # buka http://localhost:8000
+pip install -r requirements-dev.txt    # requirements.txt = hanya yang dipakai app; -dev menambah pytest dan ruff
+uvicorn app.main:app --reload          # buka http://localhost:8000
 ```
 
+Butuh Python 3.10 atau lebih baru.
+
 - **Tanpa API key** jalan di *mode demo* (model palsu yang menjalankan kode sungguhan di sandbox). Cukup untuk melihat alurnya.
-- **Dengan model asli:** `export ANTHROPIC_API_KEY=...` (PowerShell: `$env:ANTHROPIC_API_KEY="..."`) lalu jalankan ulang.
+- **Dengan model asli:** salin `.env.example` jadi `.env`, isi `ANTHROPIC_API_KEY` (dan `VOYAGE_API_KEY` untuk RAG),
+  lalu jalankan ulang. `.env` dibaca otomatis (`python-dotenv`) dan sudah ada di `.gitignore`.
   Model bisa diganti lewat `MODEL=...` (bawaan `claude-haiku-5-5`).
-- Tes: `pytest` (15 tes, tanpa jaringan dan tanpa API key).
+- Tes: `pytest` (66 tes, tanpa jaringan dan tanpa API key; Voyage diganti objek palsu). Lint dan format: `ruff check .` dan `ruff format .`.
 
 ## Cara kerjanya
 
@@ -32,12 +35,89 @@ browser ──POST /api/chat {messages}──▶ main.py ──▶ agent.py (loo
 
 | Berkas | Isi | Baca kalau mau paham |
 |---|---|---|
+| `app/config.py` | semua setting dan konstanta di satu tempat | mengubah batas, ukuran chunk, nama model |
 | `app/agent.py` | loop agent | inti semuanya, mulai dari sini |
 | `app/tools.py` | skema tool + penjalannya | cara model "memanggil fungsi" |
 | `app/sandbox.py` | menjalankan kode di subprocess | batas waktu, memori, env bersih |
 | `app/llm.py` | klien model + `DemoLLM` | satu antarmuka, dua implementasi |
 | `app/main.py` | server, stream SSE | bagaimana event sampai ke browser |
 | `static/index.html` | UI satu halaman | membaca stream, kartu tool |
+| `app/embeddings.py` | embedding Voyage + embedding demo + reranker | teks jadi vektor, `input_type` |
+| `app/chunking.py` | memotong teks panjang | ukuran dan overlap |
+| `app/rag.py` | penyimpanan vektor, indexing, pencarian | cosine, top-k, rerank, cache sidik jari |
+| `docs/` | dokumen contoh (kopi, hewan, cuti) | bahan untuk dicari |
+
+## Debug di VS Code
+
+Buka folder proyek di VS Code, pasang ekstensi yang disarankan (muncul sebagai notifikasi; daftarnya di `.vscode/extensions.json`),
+dan pilih interpreter dari `.venv` (`Ctrl+Shift+P` → *Python: Select Interpreter*). Lalu di panel **Run and Debug** (`F5`):
+
+| Konfigurasi | Untuk |
+|---|---|
+| **API (debug)** | menjalankan server di port 8000 dengan debugger; pasang breakpoint di `agent.py`, `tools.py`, `rag.py` |
+| **API (debug, step into libraries)** | sama, tapi boleh masuk ke kode pustaka (FastAPI, anthropic, numpy) |
+| **Search the docs without the LLM** | menjalankan `python -m app.rag` dengan pertanyaan yang kamu ketik, untuk melihat skor |
+| **Tests: current file** | men-debug berkas tes yang sedang terbuka |
+| **Debug Tests (Testing panel)** | dipakai ikon debug di panel *Testing* (tes `pytest` sudah terdeteksi otomatis) |
+
+Tempat breakpoint yang enak untuk belajar:
+1. `app/agent.py`, baris `async for event in llm.stream(...)`: lihat isi `messages` tiap putaran.
+2. `app/tools.py`, `run_tool`: lihat apa yang diminta model.
+3. `app/rag.py`, `VectorStore.search`: lihat `scores` dan `order` sebelum dipotong ke `k`.
+4. `app/chunking.py`, `chunk_text`: lihat potongan yang terbentuk.
+
+Hal yang perlu diketahui:
+- **Jangan pakai `--reload` saat debug.** Reloader menjalankan server di proses anak, dan breakpoint sering tidak kena. Konfigurasi di atas sengaja tanpa `--reload`; ubah kode lalu mulai ulang (`Ctrl+Shift+F5`).
+- **Kode yang ditulis model tidak bisa di-debug.** Ia jalan di proses terpisah (`sandbox.py`). Breakpoint di `sandbox.py` sendiri kena.
+- Debugger memakai `.env` yang sama dengan app (dibaca `python-dotenv` saat start), jadi tidak perlu mengisi `envFile`.
+- Jawaban dari model dikirim sebagai stream; kalau berhenti di breakpoint lama, browser menunggu dan bisa putus. Itu normal.
+
+## RAG: model membaca dokumenmu
+
+Model tidak tahu isi dokumenmu. Jadi sebelum menjawab, kita **cari** potongan yang relevan dan memberikannya sebagai teks.
+Di sini pencarian itu adalah **tool** (`search_docs`), jadi model sendiri yang memutuskan kapan perlu mencari. Pola yang sama
+dipakai Router MissTika (`search_knowledge_base`), hanya dengan pgvector sebagai penyimpanan.
+
+```
+INDEX (sekali per dokumen)                    PENCARIAN (tiap pertanyaan)
+docs/*.md ─▶ chunking ─▶ embedding            pertanyaan ─▶ embedding (input_type="query")
+              (800 huruf,   (input_type=              │
+              overlap 150)   "document")              ▼
+                   │                         cosine ke SEMUA vektor ─▶ top 20 ─▶ reranker ─▶ top 5
+                   ▼                                                                          │
+           VectorStore: matriks numpy + records.json (data/index/)                            ▼
+                                                                         tool_result ─▶ model menjawab + sebut sumber
+```
+
+Konsep yang perlu dipegang:
+- **Embedding** mengubah teks jadi daftar angka (vektor). Teks yang artinya mirip menghasilkan vektor yang arahnya mirip.
+- **Cosine similarity** = seberapa searah dua vektor (1 = sama arah, 0 = tidak berhubungan). Vektor sudah dibuat berpanjang 1,
+  jadi cukup perkalian titik (`vectors @ query_vector`). Itu seluruh "database vektor"-nya.
+- **`input_type`**: dokumen di-embed sebagai `"document"`, pertanyaan sebagai `"query"`. Voyage menambah awalan tersembunyi yang
+  berbeda, sehingga pertanyaan lebih dekat ke potongan yang menjawabnya. Tertukar = hasil lebih buruk, tanpa error.
+- **Chunking**: satu vektor untuk satu buku mengaburkan semuanya; satu vektor per kata kehilangan konteks. Overlap menjaga
+  kalimat yang kebetulan jatuh di titik potong.
+- **Model embedding harus sama** antara indexing dan pencarian. Vektor dari model lain hidup di "ruang" berbeda, jadi
+  `VectorStore` menolak membuka index yang dibuat model lain.
+- **Reranker**: pencarian vektor cepat tapi kasar. Reranker membaca pertanyaan *bersama* tiap kandidat dan menilai ulang. Lebih
+  lambat, jadi hanya untuk 20 kandidat teratas.
+- **Sidik jari (hash)**: dokumen yang tidak berubah dilewati saat index ulang, jadi tidak membayar embedding dua kali.
+- **Dibangun saat pertama dipakai, bukan saat start**: permintaan pertama sedikit lebih lambat, tapi server tidak lambat naik.
+
+Mencobanya tanpa LLM:
+```bash
+python -m app.rag "kopi saya terasa pahit"                    # skor per potongan di terminal
+curl "localhost:8000/api/search?q=anjing perlu olahraga&k=3"   # sama, lewat server
+curl -X POST localhost:8000/api/index                         # index ulang folder docs/
+```
+
+**Mode demo vs Voyage.** Tanpa `VOYAGE_API_KEY`, `DemoEmbedder` hanya mencocokkan *kata*. Coba "anjing itu harus dijalankan tiap hari":
+hasilnya salah (kata "hari" cocok dengan dokumen cuti), karena demo tidak tahu "dijalankan" ≈ "diajak jalan". Dengan Voyage, dokumen
+hewan seharusnya menang (belum diuji dengan key asli; coba sendiri). Perbedaan itulah gunanya embedding. Nama model bisa diganti lewat `VOYAGE_MODEL` dan `VOYAGE_RERANK_MODEL`
+(bawaan `voyage-3.5` dan `rerank-2.5`).
+
+Yang belum teruji: Voyage asli. Tes memakai klien palsu yang memeriksa *apa yang dikirim* (model, `input_type`, batch), bukan
+mutu hasilnya. Cobalah dengan key-mu dan bandingkan skor dengan dan tanpa reranker.
 
 ## Penting: sandbox ini BUKAN batas keamanan
 
@@ -63,3 +143,16 @@ Di Windows batas memori tidak aktif (hanya batas waktu).
 
 Tanpa login, tanpa database, tanpa batas penggunaan, satu pengguna. Riwayat ada di browser, jadi pengguna bisa memalsukannya.
 Itu tidak apa-apa untuk belajar dan sengaja dibiarkan supaya kodenya tetap kecil.
+
+## Latihan RAG
+
+1. **Lihat sendiri efeknya.** Di `rag.py`, ubah `add_document(..., size=800, overlap=150)` jadi `size=200, overlap=0`, index ulang
+   (hapus `data/index/`), lalu tanya hal yang jawabannya melintasi dua paragraf. Apa yang hilang?
+2. **Reranker.** Tulis `ReverseReranker`-mu sendiri seperti di `tests/test_rag.py`, lalu bandingkan urutan dengan dan tanpa `VoyageReranker`.
+3. **Tambah PDF.** `index_folder` hanya membaca `.md` dan `.txt`. Tambah `.pdf` dengan `pypdf` (ekstrak teks per halaman, simpan nomor halaman di `records`).
+   Perhatikan: PDF hasil scan tidak punya teks. Itu sebabnya Router punya jalur OCR.
+4. **Metadata filter.** Tambah kolom `tag` per dokumen dan parameter `tag` di `search_docs`, lalu saring sebelum menghitung cosine
+   (di Router: `knowledge_filter`).
+5. **Hybrid search.** Gabungkan skor vektor dengan pencocokan kata (BM25 sederhana). Di mana kata kunci mengalahkan embedding? (Kode produk, nama orang.)
+6. **Ukur kualitasnya.** Buat 15 pasangan (pertanyaan, berkas yang benar), hitung seberapa sering berkas benar ada di top 3 (recall@3).
+   Ubah ukuran chunk dan bandingkan angkanya. Tanpa angka, "lebih bagus" hanya perasaan.

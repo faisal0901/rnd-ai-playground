@@ -1,0 +1,16 @@
+# Tool settings only; this is an app, not a package you install.
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# E/F: errors and unused code, I: import order, UP: modern syntax, B: likely bugs, SIM: simplifications
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"

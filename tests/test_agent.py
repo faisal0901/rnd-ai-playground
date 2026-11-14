@@ -42,7 +42,7 @@ def test_a_tool_call_runs_the_code_and_the_model_reads_the_result_in_the_next_ro
 
     assert [e["kind"] for e in events] == ["tool_call", "tool_result", "text", "done"]
     assert events[1]["result"]["stdout"].strip() == "42"
-    second_round = llm.seen[1]                       # what the model was shown the second time
+    second_round = llm.seen[1]  # what the model was shown the second time
     result_message = second_round[-1]
     assert result_message["role"] == "user" and result_message["content"][0]["type"] == "tool_result"
     assert result_message["content"][0]["tool_use_id"] == "t1" and "42" in result_message["content"][0]["content"]
@@ -63,7 +63,7 @@ def test_an_unknown_tool_does_not_crash_the_loop():
 
 
 def test_a_model_that_never_stops_calling_tools_is_cut_off():
-    llm = Scripted([[call("print(1)")]])             # the same tool call, forever
+    llm = Scripted([[call("print(1)")]])  # the same tool call, forever
     events = collect(llm)
     assert events[-1]["kind"] == "error" and str(MAX_ROUNDS) in events[-1]["message"]
     assert sum(1 for e in events if e["kind"] == "tool_call") == MAX_ROUNDS

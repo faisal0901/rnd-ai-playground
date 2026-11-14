@@ -39,5 +39,5 @@ def test_every_run_starts_in_an_empty_throwaway_folder():
     first = run("import os\nopen('note.txt', 'w').write('hi')\nprint(sorted(os.listdir('.')))")
     second = run("import os\nprint(sorted(os.listdir('.')))")
     assert "note.txt" in first["stdout"]
-    assert "note.txt" not in second["stdout"]          # nothing survives between runs
-    assert not os.path.exists("note.txt")              # and nothing was written next to your project
+    assert "note.txt" not in second["stdout"]  # nothing survives between runs
+    assert not os.path.exists("note.txt")  # and nothing was written next to your project

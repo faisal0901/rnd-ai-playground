@@ -5,3 +5,5 @@ __pycache__/
 venv/
 .env
 screenshot_*.png
+data/
+.ruff_cache/
