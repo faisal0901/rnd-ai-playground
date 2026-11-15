@@ -52,8 +52,15 @@ def list_documents(store: VectorStore, upload_dir: Path, sample_dir: Path) -> li
     for kind, folder in (("sample", sample_dir), ("upload", upload_dir)):
         for file in sorted(folder.iterdir()) if folder.is_dir() else []:
             if file.is_file() and file.suffix.lower() in SUPPORTED:
+                info = file.stat()
                 rows.append(
-                    {"name": file.name, "kind": kind, "chunks": chunks.get(file.name, 0), "bytes": file.stat().st_size}
+                    {
+                        "name": file.name,
+                        "kind": kind,
+                        "chunks": chunks.get(file.name, 0),
+                        "bytes": info.st_size,
+                        "modified": info.st_mtime,  # seconds since the epoch: when it was uploaded
+                    }
                 )
     return rows
 

@@ -12,11 +12,29 @@ def post(client, messages):
     return [json.loads(chunk[len("data: ") :]) for chunk in response.text.split("\n\n") if chunk]
 
 
-def test_the_page_is_served():
-    client = TestClient(create_app(DemoLLM()))
+def test_the_built_frontend_is_served_and_deep_links_get_the_app(tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<title>Nara</title>", encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
+    client = TestClient(create_app(DemoLLM(), frontend_dir=dist))
+
+    for path in ("/", "/files", "/chat/abc123"):  # the router lives in the browser: reloading these must work
+        assert "<title>Nara</title>" in client.get(path).text
+    script = client.get("/assets/app.js")
+    assert script.text == "console.log(1)"
+    assert "javascript" in script.headers["content-type"]  # text/plain would make the browser refuse to run it
+    assert client.get("/api/health").json() == {"mode": "demo"}  # real API routes still win
+    assert client.get("/api/does-not-exist").status_code == 404  # and an unknown one is not answered with the app
+    assert "top secret" not in client.get("/..%2fsecret.txt").text  # nothing outside the build folder
+
+
+def test_without_a_build_the_root_says_how_to_build_it(tmp_path):
+    client = TestClient(create_app(DemoLLM(), frontend_dir=tmp_path))
     page = client.get("/")
-    assert page.status_code == 200 and "Learn AI Playground" in page.text
-    assert client.get("/api/health").json() == {"mode": "demo"}
+    assert page.status_code == 503 and "npm run build" in page.text
+    assert client.get("/api/health").status_code == 200
 
 
 def test_a_chat_streams_events_and_ends_with_the_whole_transcript():

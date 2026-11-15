@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -53,6 +54,7 @@ def test_the_list_shows_examples_and_uploads_with_their_chunk_counts(env):
     assert rows["contoh.md"]["kind"] == "sample" and rows["contoh.md"]["chunks"] == 1
     assert rows["kopi.md"]["kind"] == "upload" and rows["kopi.md"]["chunks"] == 1
     assert rows["kopi.md"]["bytes"] == len(KOPI.encode())
+    assert abs(rows["kopi.md"]["modified"] - time.time()) < 60  # when it was uploaded, for the Files page
 
 
 def test_uploading_the_same_file_again_does_not_embed_it_again(env):
@@ -249,13 +251,7 @@ def test_the_model_is_told_about_the_attachment_and_does_not_search_for_it(env):
     assert "rapat.txt" in answer and "tidak di-embed" in answer
 
 
-# ---- pages and startup ----------------------------------------------------------------------------------------------
-def test_the_knowledge_base_page_is_served_and_linked_from_the_chat(env):
-    page = env.client.get("/kb")
-    assert page.status_code == 200 and "Your Knowledge Base" in page.text
-    assert 'href="/kb"' in env.client.get("/").text and 'id="attach"' in env.client.get("/").text
-
-
+# ---- startup ---------------------------------------------------------------------------------------------------------
 def test_uploads_from_an_earlier_run_are_indexed_again_when_the_app_starts(tmp_path, monkeypatch):
     samples, uploads = tmp_path / "samples", tmp_path / "uploads"
     samples.mkdir(), uploads.mkdir()

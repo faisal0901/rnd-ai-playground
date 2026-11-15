@@ -9,8 +9,20 @@ sekitar 300 baris semuanya. Ditulis dari nol supaya bisa dibaca dari atas ke baw
 python -m venv .venv
 source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt    # requirements.txt = hanya yang dipakai app; -dev menambah pytest dan ruff
-uvicorn app.main:app --reload          # buka http://localhost:8000
+uvicorn app.main:app --reload          # API di http://localhost:8000
 ```
+
+Tampilannya (aplikasi **Nara**) adalah React + TypeScript di folder `frontend/`. Butuh Node 20 atau lebih baru.
+
+```bash
+cd frontend
+npm install
+npm run dev        # buka http://localhost:5173 (hot reload; /api diteruskan ke port 8000)
+npm run build      # hasilnya di frontend/dist; setelah itu http://localhost:8000 menyajikannya langsung
+```
+
+Halamannya: `/` dan `/chat/:id` (chat), `/files` (File saya: unggah, daftar, hapus dokumen knowledge base).
+Percakapan disimpan di `localStorage` browser, karena server tidak menyimpan apa pun.
 
 Butuh Python 3.10 atau lebih baru.
 
@@ -40,14 +52,15 @@ browser ──POST /api/chat {messages}──▶ main.py ──▶ agent.py (loo
 | `app/tools.py` | skema tool + penjalannya | cara model "memanggil fungsi" |
 | `app/sandbox.py` | menjalankan kode di subprocess | batas waktu, memori, env bersih |
 | `app/llm.py` | klien model + `DemoLLM` | satu antarmuka, dua implementasi |
-| `app/main.py` | server, stream SSE | bagaimana event sampai ke browser |
-| `static/index.html` | UI satu halaman | membaca stream, kartu tool |
+| `app/main.py` | server, stream SSE, menyajikan `frontend/dist` | bagaimana event sampai ke browser |
+| `frontend/src/state/store.ts` | percakapan di browser + membaca stream SSE | alur event jadi pesan di layar |
+| `frontend/src/pages/ChatPage.tsx` | halaman chat | bubble, blok kode, kartu tool, lampiran |
 | `app/embeddings.py` | embedding Voyage + embedding demo + reranker | teks jadi vektor, `input_type` |
 | `app/chunking.py` | memotong teks panjang | ukuran dan overlap |
 | `app/rag.py` | penyimpanan vektor, indexing, pencarian | cosine, top-k, rerank, cache sidik jari |
 | `app/documents.py` | file → teks (txt, md, csv, json, log, PDF), nama file aman | satu jalur baca untuk KB dan lampiran |
 | `app/kb.py` | simpan, embed, daftar, hapus dokumen knowledge base | upload yang langsung masuk RAG |
-| `static/kb.html` | halaman **Knowledge base** (`/kb`) | upload, daftar, hapus, coba cari |
+| `frontend/src/pages/FilesPage.tsx` | halaman **File saya** (`/files`) | upload dengan progres, daftar, hapus |
 | `docs/` | dokumen contoh (kopi, hewan, cuti), hanya baca | bahan untuk dicari |
 
 ## Debug di VS Code

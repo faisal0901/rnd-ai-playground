@@ -1,22 +1,20 @@
-"""The web server: the chat page, the knowledge-base page and their endpoints.
+"""The web server: the API for the React app in frontend/ (chat, files) and the app itself, once built.
 Run it with:  uvicorn app.main:app --reload"""
 
 import asyncio
 import json
+import mimetypes
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import config, kb, rag
 from app.agent import Event, run_agent
-from app.config import ROOT
 from app.documents import DocumentError, clip, extract_text, safe_name
 from app.llm import LLM, DemoLLM, make_llm
-
-STATIC = ROOT / "static"
 
 
 class ChatRequest(BaseModel):
@@ -36,7 +34,12 @@ async def read_upload(file: UploadFile) -> bytes:
     return data
 
 
-def create_app(llm: LLM | None = None, upload_dir: Path | None = None, sample_dir: Path | None = None) -> FastAPI:
+def create_app(
+    llm: LLM | None = None,
+    upload_dir: Path | None = None,
+    sample_dir: Path | None = None,
+    frontend_dir: Path | None = None,
+) -> FastAPI:
     app = FastAPI(title="Learn AI Playground")
     app.state.llm = llm or make_llm()
     uploads, samples = upload_dir or config.UPLOAD_DIR, sample_dir or config.DOCS_DIR
@@ -49,14 +52,6 @@ def create_app(llm: LLM | None = None, upload_dir: Path | None = None, sample_di
         if request.method == "POST" and announced > config.MAX_UPLOAD_BYTES + 1024 * 1024:
             return JSONResponse({"detail": "The upload is too large."}, status_code=413)
         return await call_next(request)
-
-    @app.get("/")
-    def page() -> FileResponse:
-        return FileResponse(STATIC / "index.html")
-
-    @app.get("/kb")
-    def knowledge_base_page() -> FileResponse:
-        return FileResponse(STATIC / "kb.html")
 
     @app.get("/api/health")
     def health() -> dict:
@@ -125,7 +120,45 @@ def create_app(llm: LLM | None = None, upload_dir: Path | None = None, sample_di
             raise HTTPException(error.status, str(error)) from error
         return {"name": name, "text": text, "chars": len(text), "truncated": cut}
 
+    serve_frontend(app, frontend_dir or config.FRONTEND_DIR)  # last: its catch-all route must not shadow /api/*
     return app
+
+
+def serve_frontend(app: FastAPI, dist: Path) -> None:
+    """Serve the React app (built with `npm run build` in frontend/). Every path that is not a file or an /api route
+    gets index.html, so /chat/<id> and /files work when you reload them."""
+    root = dist.resolve()
+    # Python asks the OS for file types, and some Windows machines say .js is text/plain. A browser refuses to run a
+    # module script served that way, which leaves the page blank. So say it ourselves.
+    for suffix, kind in (
+        (".js", "text/javascript"),
+        (".mjs", "text/javascript"),
+        (".css", "text/css"),
+        (".woff2", "font/woff2"),
+    ):
+        mimetypes.add_type(kind, suffix)
+
+    if not (root / "index.html").is_file():
+
+        @app.get("/", include_in_schema=False)
+        def not_built() -> HTMLResponse:
+            return HTMLResponse(
+                "<h1>The frontend is not built yet</h1>"
+                "<p>Run <code>cd frontend &amp;&amp; npm install &amp;&amp; npm run build</code> and reload,"
+                " or run <code>npm run dev</code> there and open <a href='http://localhost:5173'>localhost:5173</a>.</p>",
+                status_code=503,
+            )
+
+        return
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "Not found")
+        file = (root / path).resolve()
+        if path and file.is_file() and file.is_relative_to(root):  # a real file: a script, a font, ...
+            return FileResponse(file)
+        return FileResponse(root / "index.html")
 
 
 app = create_app()

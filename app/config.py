@@ -16,6 +16,8 @@ MODEL = os.environ.get("MODEL", "claude-haiku-5-5")
 VOYAGE_MODEL = os.environ.get("VOYAGE_MODEL", "voyage-3.5")
 VOYAGE_RERANK_MODEL = os.environ.get("VOYAGE_RERANK_MODEL", "rerank-2.5")
 
+FRONTEND_DIR = ROOT / "frontend" / "dist"  # the React app, built with `npm run build` in frontend/
+
 # ---- agent loop ----------------------------------------------------------------------------------------------------
 MAX_ROUNDS = 6  # a model that keeps calling tools must stop somewhere
 MAX_TOKENS = 2048  # longest answer the model may write in one round
